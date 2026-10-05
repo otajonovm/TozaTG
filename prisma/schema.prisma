@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum ChatType {
+  CHANNEL
+  GROUP
+  SUPERGROUP
+}
+
+enum MemberStatus {
+  CREATOR
+  ADMINISTRATOR
+  MEMBER
+  RESTRICTED
+  LEFT
+  KICKED
+}
+
+enum TaskType {
+  SCAN
+  CLEAN
+  CLEAN_DELETED
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id         String   @id @default(cuid())
+  telegramId BigInt   @unique @map("telegram_id")
+  firstName  String?  @map("first_name")
+  username   String?
+  role       UserRole @default(USER)
+  balance    Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  ownedChats Chat[]
+
+  @@map("users")
+}
+
+model Chat {
+  id             String   @id @default(cuid())
+  telegramChatId BigInt   @unique @map("telegram_chat_id")
+  ownerId        String   @map("owner_id")
+  title          String
+  type           ChatType
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  owner    User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  settings ChatSettings?
+  members  ChatMember[]
+  tasks    Task[]
+
+  @@index([ownerId])
+  @@map("chats")
+}
+
+model ChatSettings {
+  id                    String   @id @default(cuid())
+  chatId                String   @unique @map("chat_id")
+  captchaEnabled        Boolean  @default(true) @map("captcha_enabled")
+  filterSpam            Boolean  @default(true) @map("filter_spam")
+  filterNonLatin        Boolean  @default(false) @map("filter_non_latin")
+  filterNoPremium       Boolean  @default(false) @map("filter_no_premium")
+  deleteServiceMessages Boolean  @default(true) @map("delete_service_messages")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@map("chat_settings")
+}
+
+/// Skanerlangan a'zo. `userId` — Telegram user id.
+/// O'chirilgan akkauntlar `users` jadvalida bo'lmaydi, shuning uchun FK yo'q.
+model ChatMember {
+  id         String       @id @default(cuid())
+  chatId     String       @map("chat_id")
+  userId     BigInt       @map("user_id")
+  isDeleted  Boolean      @default(false) @map("is_deleted")
+  isBot      Boolean      @default(false) @map("is_bot")
+  hasPremium Boolean      @default(false) @map("has_premium")
+  dcId       Int?         @map("dc_id")
+  status     MemberStatus @default(MEMBER)
+  scannedAt  DateTime     @default(now()) @map("scanned_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, userId])
+  @@index([chatId, isDeleted])
+  @@index([chatId, status])
+  @@map("chat_members")
+}
+
+model Task {
+  id         String     @id @default(cuid())
+  chatId     String     @map("chat_id")
+  type       TaskType
+  status     TaskStatus @default(PENDING)
+  total      Int        @default(0)
+  processed  Int        @default(0)
+  error      String?    @db.Text
+  bullJobId  String?    @map("bull_job_id")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, status])
+  @@index([status, type])
+  @@map("tasks")
+}
