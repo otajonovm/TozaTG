@@ -8,8 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "heroku-prebuild": "prisma generate",
+    "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "heroku-release": "node scripts/heroku-release.js",
     "typecheck": "tsc --noEmit",
