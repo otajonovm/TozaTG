@@ -14,16 +14,6 @@ function errorText(error: unknown): string {
   return String(error);
 }
 
-function isHiddenFromUser(error: unknown): boolean {
-  const text = errorText(error);
-  return (
-    text.includes("ko'rmayapti") ||
-    text.includes("CHANNEL_INVALID") ||
-    text.includes("CHANNEL_PRIVATE") ||
-    text.includes("input entity")
-  );
-}
-
 function isPrivateChannel(error: unknown): boolean {
   return errorText(error).includes("CHANNEL_PRIVATE");
 }
@@ -45,6 +35,16 @@ function channelFromUpdates(updates: TgApi.TypeUpdates): TgApi.Channel | null {
   return null;
 }
 
+function readableChat(chat: TgApi.TypeChat): ReadableEntity | null {
+  if (chat.className === "Channel" || chat.className === "Chat") return chat;
+  return null;
+}
+
+function readableFromInvite(invite: TgApi.TypeChatInvite): ReadableEntity | null {
+  if (invite.className !== "ChatInviteAlready") return null;
+  return readableChat(invite.chat);
+}
+
 async function assertBotAdmin(api: GrammyApi, chatId: number): Promise<{ canPromote: boolean }> {
   const me = await api.getMe();
   let member: Awaited<ReturnType<GrammyApi["getChatMember"]>>;
@@ -60,6 +60,54 @@ async function assertBotAdmin(api: GrammyApi, chatId: number): Promise<{ canProm
   return { canPromote: member.can_promote_members === true };
 }
 
+async function joinByUsername(
+  client: MtprotoClient,
+  username: string,
+): Promise<{ entity: ReadableEntity; leave: boolean }> {
+  const resolved = await client.getEntity(username);
+  if (resolved.className !== "Channel" && resolved.className !== "Chat") {
+    throw new Error("Kanal topilmadi");
+  }
+  if (resolved.className === "Chat") return { entity: resolved, leave: false };
+  let leave = false;
+  try {
+    await client.invoke(new TgApi.channels.JoinChannel({ channel: resolved }));
+    leave = true;
+  } catch (error) {
+    if (!errorText(error).includes("USER_ALREADY_PARTICIPANT")) throw error;
+  }
+  return { entity: resolved, leave };
+}
+
+async function joinByInvite(
+  client: MtprotoClient,
+  api: GrammyApi,
+  chatId: number,
+): Promise<{ entity: ReadableEntity; leave: boolean }> {
+  const link = await api.createChatInviteLink(chatId, { name: "TozaTG", member_limit: 1 });
+  try {
+    const hash = inviteHash(link.invite_link);
+    const checked = await client.invoke(new TgApi.messages.CheckChatInvite({ hash }));
+    const already = readableFromInvite(checked);
+    if (already) return { entity: already, leave: false };
+
+    try {
+      const updates = await client.invoke(new TgApi.messages.ImportChatInvite({ hash }));
+      const entity = channelFromUpdates(updates);
+      if (!entity) throw new Error("Yopiq kanalga kirib bo'lmadi");
+      return { entity, leave: true };
+    } catch (error) {
+      if (!errorText(error).includes("USER_ALREADY_PARTICIPANT")) throw error;
+      const again = await client.invoke(new TgApi.messages.CheckChatInvite({ hash }));
+      const joined = readableFromInvite(again);
+      if (joined) return { entity: joined, leave: false };
+      return { entity: await resolveChat(client, BigInt(chatId)), leave: false };
+    }
+  } finally {
+    await api.revokeChatInviteLink(chatId, link.invite_link).catch(() => undefined);
+  }
+}
+
 async function joinChat(
   client: MtprotoClient,
   api: GrammyApi,
@@ -69,33 +117,15 @@ async function joinChat(
   const username = "username" in chat ? chat.username : undefined;
 
   if (username) {
-    const resolved = await client.getEntity(username);
-    if (resolved.className !== "Channel" && resolved.className !== "Chat") {
-      throw new Error("Kanal topilmadi");
-    }
-    if (resolved.className === "Chat") return { entity: resolved, leave: false };
-    let leave = false;
     try {
-      await client.invoke(new TgApi.channels.JoinChannel({ channel: resolved }));
-      leave = true;
+      return await joinByUsername(client, username);
     } catch (error) {
-      if (!errorText(error).includes("USER_ALREADY_PARTICIPANT")) throw error;
+      const text = errorText(error);
+      if (!text.includes("CHANNEL_PRIVATE") && !text.includes("USERNAME")) throw error;
     }
-    return { entity: resolved, leave };
   }
 
-  const link = await api.createChatInviteLink(chatId, { name: "TozaTG", member_limit: 1 });
-  try {
-    const updates = await client.invoke(new TgApi.messages.ImportChatInvite({ hash: inviteHash(link.invite_link) }));
-    const entity = channelFromUpdates(updates);
-    if (!entity) throw new Error("Yopiq kanalga kirib bo'lmadi");
-    return { entity, leave: true };
-  } catch (error) {
-    if (!errorText(error).includes("USER_ALREADY_PARTICIPANT")) throw error;
-    return { entity: await resolveChat(client, BigInt(chatId)), leave: false };
-  } finally {
-    await api.revokeChatInviteLink(chatId, link.invite_link).catch(() => undefined);
-  }
+  return joinByInvite(client, api, chatId);
 }
 
 async function promoteForReading(
@@ -170,13 +200,20 @@ export async function withManagedChat<T>(
 
   let entity: ReadableEntity | null = null;
   let leave = false;
+  let openError: unknown = null;
   try {
-    entity = await resolveChat(client, telegramChatId);
-  } catch (error) {
-    if (!isHiddenFromUser(error)) throw error;
     const opened = await joinChat(client, api, chatId);
     entity = opened.entity;
     leave = opened.leave;
+  } catch (error) {
+    openError = error;
+  }
+  if (!entity) {
+    try {
+      entity = await resolveChat(client, telegramChatId);
+    } catch (resolveError) {
+      throw openError ?? resolveError;
+    }
   }
 
   let promotedId: number | null = null;

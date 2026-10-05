@@ -2,7 +2,7 @@ import { MemberStatus } from "@prisma/client";
 import { Api } from "telegram";
 import { prisma } from "../lib/prisma";
 import { withManagedChat } from "./chat-access.service";
-import { getMtprotoClient, hasMtprotoSession, waitForFlood } from "./telegram-mtproto.service";
+import { getMtprotoClient, hasMtprotoSession, iterateMembers } from "./telegram-mtproto.service";
 
 export class AuditError extends Error {
   constructor(message: string) {
@@ -138,19 +138,8 @@ async function refreshFromTelegram(chatId: string, telegramChatId: bigint): Prom
   try {
     await withManagedChat(telegramChatId, async (entity) => {
       const client = await getMtprotoClient();
-      let offset = 0;
-      while (true) {
-        try {
-          for await (const user of client.iterParticipants(entity, { offset, showTotal: false })) {
-            await saveParticipant(chatId, user);
-            offset += 1;
-          }
-          return;
-        } catch (error) {
-          const waited = await waitForFlood(error);
-          if (waited) continue;
-          throw error;
-        }
+      for await (const user of iterateMembers(client, entity)) {
+        await saveParticipant(chatId, user);
       }
     });
   } catch (error) {

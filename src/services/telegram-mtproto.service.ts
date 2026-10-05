@@ -1,8 +1,11 @@
+import bigInt from "big-integer";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { FloodWaitError } from "telegram/errors";
 import { env } from "../config/env";
 import { sleep } from "../lib/sleep";
+
+const MEMBER_PAGE = 200;
 
 let client: TelegramClient | null = null;
 
@@ -16,6 +19,7 @@ export async function getMtprotoClient(): Promise<TelegramClient> {
   }
 
   if (client?.connected) {
+    shieldPrivateFullChannel(client);
     return client;
   }
 
@@ -25,7 +29,86 @@ export async function getMtprotoClient(): Promise<TelegramClient> {
   });
 
   await client.connect();
+  shieldPrivateFullChannel(client);
   return client;
+}
+
+function isFullChannelRequest(request: object): boolean {
+  return "className" in request && request.className === "channels.GetFullChannel";
+}
+
+/**
+ * GramJS a'zolar soni uchun channels.GetFullChannel chaqiradi.
+ * Yopiq kanal buni CHANNEL_PRIVATE bilan rad etadi va skanerni yiqitadi.
+ * So'rovni yutib, ro'yxatni o'qish davom etadi.
+ */
+function shieldPrivateFullChannel(telegram: TelegramClient): void {
+  const marked = telegram as TelegramClient & { fullChannelShield?: boolean };
+  if (marked.fullChannelShield) return;
+  marked.fullChannelShield = true;
+  const raw = telegram.invoke.bind(telegram);
+  telegram.invoke = (async (request: Api.AnyRequest, dcId?: number) => {
+    try {
+      return await raw(request, dcId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isFullChannelRequest(request) && message.includes("CHANNEL_PRIVATE")) {
+        console.warn("[mtproto] yopiq kanal GetFullChannel ni rad etdi, a'zolar ro'yxati davom etadi");
+        return { fullChat: { participantsCount: 1 }, chats: [], users: [] };
+      }
+      throw error;
+    }
+  }) as TelegramClient["invoke"];
+}
+
+function isUser(user: Api.TypeUser): user is Api.User {
+  return user.className === "User";
+}
+
+/** A'zolarni channels.GetFullChannel chaqirmasdan o'qiydi. */
+export async function* iterateMembers(
+  telegram: TelegramClient,
+  entity: Api.Channel | Api.Chat,
+): AsyncGenerator<Api.User> {
+  if (entity.className === "Chat") {
+    const full = await telegram.invoke(new Api.messages.GetFullChat({ chatId: entity.id }));
+    if (!(full.fullChat instanceof Api.ChatFull)) return;
+    const participants = full.fullChat.participants;
+    if (!(participants instanceof Api.ChatParticipants)) return;
+    const byId = new Map(full.users.filter(isUser).map((user) => [user.id.toString(), user]));
+    for (const participant of participants.participants) {
+      if (!("userId" in participant)) continue;
+      const user = byId.get(participant.userId.toString());
+      if (user) yield user;
+    }
+    return;
+  }
+
+  let offset = 0;
+  while (true) {
+    let page: Api.channels.TypeChannelParticipants;
+    try {
+      page = await telegram.invoke(
+        new Api.channels.GetParticipants({
+          channel: entity,
+          filter: new Api.ChannelParticipantsSearch({ q: "" }),
+          offset,
+          limit: MEMBER_PAGE,
+          hash: bigInt.zero,
+        }),
+      );
+    } catch (error) {
+      if (await waitForFlood(error)) continue;
+      throw error;
+    }
+    if (page.className !== "channels.ChannelParticipants" || page.users.length === 0) return;
+    for (const user of page.users) {
+      if (isUser(user)) yield user;
+    }
+    const count = page.participants.length;
+    offset += count;
+    if (count < MEMBER_PAGE) return;
+  }
 }
 
 export function floodWaitSeconds(error: unknown): number | null {
