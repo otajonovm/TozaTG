@@ -52,7 +52,8 @@ export async function runScanTask(taskId: string): Promise<void> {
     let offset = 0;
     while (true) {
       try {
-        for await (const user of client.iterParticipants(entity, { offset })) {
+        // showTotal ichida channels.GetFullChannel bor. Yopiq kanalda u CHANNEL_PRIVATE qaytaradi.
+        for await (const user of client.iterParticipants(entity, { offset, showTotal: false })) {
           await saveParticipant(task.chatId, user);
           processed += 1;
           offset += 1;

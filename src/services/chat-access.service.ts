@@ -16,7 +16,16 @@ function errorText(error: unknown): string {
 
 function isHiddenFromUser(error: unknown): boolean {
   const text = errorText(error);
-  return text.includes("ko'rmayapti") || text.includes("CHANNEL_INVALID") || text.includes("input entity");
+  return (
+    text.includes("ko'rmayapti") ||
+    text.includes("CHANNEL_INVALID") ||
+    text.includes("CHANNEL_PRIVATE") ||
+    text.includes("input entity")
+  );
+}
+
+function isPrivateChannel(error: unknown): boolean {
+  return errorText(error).includes("CHANNEL_PRIVATE");
 }
 
 function inviteHash(link: string): string {
@@ -176,13 +185,33 @@ export async function withManagedChat<T>(
     if (canPromote) {
       promotedId = await promoteForReading(api, client, chatId, canPromote);
     }
+
+    const read = async (target: ReadableEntity): Promise<T> => {
+      try {
+        return await work(target);
+      } catch (error) {
+        const text = errorText(error);
+        const needsAdmin = text.includes("CHAT_ADMIN_REQUIRED") || text.includes("admin privileges");
+        if (!needsAdmin || promotedId !== null) throw error;
+        throw new Error("Bot admin, lekin a'zolarni o'qish uchun unga «Admin qo'shish» huquqini yoqing.");
+      }
+    };
+
     try {
-      return await work(entity);
+      return await read(entity);
     } catch (error) {
-      const text = errorText(error);
-      const needsAdmin = text.includes("CHAT_ADMIN_REQUIRED") || text.includes("admin privileges");
-      if (!needsAdmin || promotedId !== null) throw error;
-      throw new Error("Bot admin, lekin a'zolarni o'qish uchun unga «Admin qo'shish» huquqini yoqing.");
+      if (!isPrivateChannel(error)) throw error;
+      const opened = await joinChat(client, api, chatId);
+      entity = opened.entity;
+      leave = opened.leave || leave;
+      try {
+        return await read(opened.entity);
+      } catch (retryError) {
+        if (!isPrivateChannel(retryError)) throw retryError;
+        throw new Error(
+          "Yopiq kanal a'zolarini o'qib bo'lmadi. Ulangan akkaunt shu kanalda bo'lishi va bot admin bo'lishi kerak.",
+        );
+      }
     }
   } finally {
     if (promotedId !== null) await demoteUser(api, chatId, promotedId);

@@ -141,7 +141,7 @@ async function refreshFromTelegram(chatId: string, telegramChatId: bigint): Prom
       let offset = 0;
       while (true) {
         try {
-          for await (const user of client.iterParticipants(entity, { offset })) {
+          for await (const user of client.iterParticipants(entity, { offset, showTotal: false })) {
             await saveParticipant(chatId, user);
             offset += 1;
           }
