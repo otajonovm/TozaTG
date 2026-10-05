@@ -4,12 +4,14 @@
   "private": true,
   "description": "TozaTG — Telegram kanallari va guruhlarini tozalash, auditoriya tahlili va moderatsiya",
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "heroku-prebuild": "prisma generate",
     "start": "node dist/index.js",
+    "heroku-release": "node scripts/heroku-release.js",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -25,12 +27,12 @@
     "dotenv": "^17.2.3",
     "grammy": "^1.38.3",
     "ioredis": "^5.8.1",
+    "prisma": "^6.16.3",
     "telegram": "^2.26.22",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
-    "prisma": "^6.16.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

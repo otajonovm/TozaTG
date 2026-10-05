@@ -1,6 +1,22 @@
 import "dotenv/config";
 import { z } from "zod";
 
+function appendSsl(name: "DATABASE_URL" | "DIRECT_URL"): void {
+  const value = process.env[name];
+  if (!value || value.includes("sslmode=")) return;
+  if (value.includes("localhost") || value.includes("127.0.0.1")) return;
+  process.env[name] = `${value}${value.includes("?") ? "&" : "?"}sslmode=require`;
+}
+
+if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
+  process.env.DIRECT_URL = process.env.DATABASE_URL;
+}
+appendSsl("DATABASE_URL");
+appendSsl("DIRECT_URL");
+if (!process.env.REDIS_URL) {
+  process.env.REDIS_URL = "redis://127.0.0.1:6379";
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   BOT_TOKEN: z.string().min(1, "BOT_TOKEN bo'sh bo'lmasligi kerak"),
